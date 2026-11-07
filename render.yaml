@@ -1,0 +1,35 @@
+# One-click deploy on Render: the app (built from the Dockerfile) plus a Postgres database.
+services:
+  - type: web
+    name: back-in-stock-alerts
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: back-in-stock-db
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: STOCK_API_URL
+        sync: false
+      - key: STOCK_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+
+databases:
+  - name: back-in-stock-db
+    plan: free
+    region: oregon
+    postgresMajorVersion: "16"
+    databaseName: back_in_stock_db
+    user: back_in_stock_db_user
