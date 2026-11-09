@@ -72,6 +72,15 @@ function isAdmin(req) {
 }
 const secureCookie = (req) => (String(req.headers['x-forwarded-proto'] || '').startsWith('https') ? '; Secure' : '');
 
+// Admin sign-ins are written to the server log (never shown in the admin page).
+function browserOf(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  const b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : ua ? ua.slice(0, 40) : 'unknown';
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${b} on ${os}` : b;
+}
+const logAdmin = (req, msg) => log('info', msg, { ip: clientIp(req), browser: browserOf(req) });
+
 // ---------- routes ----------
 async function route(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -147,8 +156,15 @@ async function route(req, res) {
   if (p === '/admin/login' && m === 'POST') {
     const ip = clientIp(req);
     const form = new URLSearchParams(await readBody(req));
-    if (limited(`login:${ip}`, 10, 15 * 60_000)) return html(res, 429, loginPage({ error: 'Too many attempts. Try again in 15 minutes.', nonce }), nonce);
-    if (!safeEqual(form.get('password') || '', adminPassword)) return html(res, 401, loginPage({ error: 'That password isn’t right.', nonce }), nonce);
+    if (limited(`login:${ip}`, 10, 15 * 60_000)) {
+      logAdmin(req, 'admin sign-in blocked: too many attempts');
+      return html(res, 429, loginPage({ error: 'Too many attempts. Try again in 15 minutes.', nonce }), nonce);
+    }
+    if (!safeEqual(form.get('password') || '', adminPassword)) {
+      logAdmin(req, 'admin sign-in failed: wrong password');
+      return html(res, 401, loginPage({ error: 'That password isn’t right.', nonce }), nonce);
+    }
+    logAdmin(req, 'admin sign-in');
     const exp = String(Date.now() + SESSION_MS);
     return redirect(res, '/admin', { 'set-cookie': `bis_admin=${exp}.${sign(exp)}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}${secureCookie(req)}` });
   }
@@ -160,7 +176,10 @@ async function route(req, res) {
       req.resume();
       return m === 'GET' ? html(res, 401, loginPage({ nonce }), nonce) : json(res, 401, { error: 'Sign in first.' });
     }
-    if (m === 'GET' && p === '/admin') return html(res, 200, await renderAdmin(url, nonce), nonce);
+    if (m === 'GET' && p === '/admin') {
+      if (String(req.headers.authorization || '').startsWith('Basic ')) logAdmin(req, 'admin sign-in (HTTP Basic)');
+      return html(res, 200, await renderAdmin(url, nonce), nonce);
+    }
     if (m === 'GET' && (mm = p.match(/^\/admin\/requests\/([\w-]{1,64})\/email$/))) {
       const r = await db.one('SELECT * FROM requests WHERE id = $1', [mm[1]]);
       if (!r) return send(res, 404, 'Not found');
